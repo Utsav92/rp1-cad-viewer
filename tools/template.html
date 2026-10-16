@@ -1,0 +1,762 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RP1 Humanoid — Interactive CAD Viewer</title>
+<style>
+:root{
+  --bg:#0a0d14; --panel:#10151f; --panel2:#161d2b; --line:#233047; --text:#e6edf7; --mute:#8091ab;
+  --acc:#22d3ee; --acc2:#f472b6; --acc3:#a3e635; --warn:#fbbf24;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font:13px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;overflow:hidden}
+#app{position:fixed;inset:0;display:grid;grid-template-columns:340px 1fr;grid-template-rows:48px 1fr}
+header{grid-column:1/3;display:flex;align-items:center;gap:14px;padding:0 16px;background:var(--panel);border-bottom:1px solid var(--line);z-index:5}
+header h1{font-size:14px;margin:0;font-weight:650;letter-spacing:.04em}
+header h1 b{color:var(--acc)}
+header .sub{color:var(--mute);font-size:12px}
+header .sp{flex:1}
+header .stat{font-family:var(--mono);font-size:11px;color:var(--mute)}
+#side{background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
+.tabs{display:flex;border-bottom:1px solid var(--line)}
+.tabs button{flex:1;background:none;border:0;color:var(--mute);padding:11px 0;font:inherit;font-weight:600;cursor:pointer;border-bottom:2px solid transparent}
+.tabs button.on{color:var(--acc);border-bottom-color:var(--acc)}
+.pane{display:none;overflow-y:auto;padding:12px 14px 24px;flex:1;min-height:0}
+.pane.on{display:block}
+.pane::-webkit-scrollbar{width:8px}.pane::-webkit-scrollbar-thumb{background:var(--line);border-radius:4px}
+h3{margin:16px 0 8px;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute);font-weight:700;display:flex;align-items:center;gap:8px}
+h3:first-child{margin-top:2px}
+h3 i{flex:1;height:1px;background:var(--line)}
+.btnrow{display:flex;flex-wrap:wrap;gap:6px}
+.btn{background:var(--panel2);border:1px solid var(--line);color:var(--text);padding:6px 10px;border-radius:6px;font:inherit;cursor:pointer;transition:.12s}
+.btn:hover{border-color:var(--acc);color:var(--acc)}
+.btn.on{background:rgba(34,211,238,.14);border-color:var(--acc);color:var(--acc)}
+.joint{padding:6px 0}
+.joint .top{display:flex;justify-content:space-between;gap:8px;font-size:12px}
+.joint .nm{color:var(--text);cursor:pointer}
+.joint .val{font-family:var(--mono);color:var(--acc);min-width:58px;text-align:right}
+.joint .lim{font-family:var(--mono);font-size:10px;color:var(--mute);display:flex;justify-content:space-between}
+input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:18px;background:transparent;margin:2px 0;cursor:pointer}
+input[type=range]::-webkit-slider-runnable-track{height:4px;background:var(--line);border-radius:2px}
+input[type=range]::-moz-range-track{height:4px;background:var(--line);border-radius:2px}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;border-radius:50%;background:var(--acc);margin-top:-5px;box-shadow:0 0 8px var(--acc)}
+input[type=range]::-moz-range-thumb{width:14px;height:14px;border:0;border-radius:50%;background:var(--acc);box-shadow:0 0 8px var(--acc)}
+.grp-l input[type=range]::-webkit-slider-thumb{background:var(--acc)}
+.grp-a input[type=range]::-webkit-slider-thumb{background:var(--acc2);box-shadow:0 0 8px var(--acc2)}
+.grp-a .val{color:var(--acc2)}
+.grp-w input[type=range]::-webkit-slider-thumb{background:var(--acc3);box-shadow:0 0 8px var(--acc3)}
+.grp-w .val{color:var(--acc3)}
+.row{display:flex;align-items:center;gap:10px;margin:8px 0}
+.row label{flex:0 0 96px;color:var(--mute)}
+.row input[type=range]{flex:1}
+.row .v{font-family:var(--mono);color:var(--acc);min-width:40px;text-align:right}
+.chk{display:flex;align-items:center;gap:8px;margin:6px 0;cursor:pointer;user-select:none}
+.chk input{accent-color:var(--acc)}
+.part{display:flex;align-items:center;gap:8px;padding:5px 6px;border-radius:6px;cursor:pointer}
+.part:hover{background:var(--panel2)}
+.part.sel{background:rgba(34,211,238,.14);outline:1px solid var(--acc)}
+.part .dot{width:9px;height:9px;border-radius:50%;flex:none}
+.part .n{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.part .m{font-family:var(--mono);font-size:10px;color:var(--mute)}
+.part .eye{background:none;border:0;color:var(--mute);cursor:pointer;font-size:14px;padding:0 2px}
+.part .eye.off{opacity:.3}
+#stage{position:relative;min-width:0;min-height:0}
+#c{position:absolute;inset:0;width:100%;height:100%;display:block;outline:none;touch-action:none}
+#hud{position:absolute;left:12px;top:12px;display:flex;gap:6px;flex-wrap:wrap;z-index:2}
+#hud .btn{background:rgba(16,21,31,.82);backdrop-filter:blur(6px)}
+#info{position:absolute;right:12px;top:12px;width:268px;background:rgba(16,21,31,.9);backdrop-filter:blur(8px);border:1px solid var(--line);border-radius:10px;padding:12px 14px;z-index:2;display:none}
+#info.on{display:block}
+#info h2{margin:0 0 2px;font-size:14px;color:var(--acc);word-break:break-all}
+#info .k{display:grid;grid-template-columns:auto 1fr;gap:3px 12px;margin:10px 0;font-size:12px}
+#info .k span:nth-child(odd){color:var(--mute)}
+#info .k span:nth-child(even){font-family:var(--mono);text-align:right}
+#tip{position:absolute;pointer-events:none;background:rgba(10,13,20,.92);border:1px solid var(--acc);color:var(--acc);padding:3px 8px;border-radius:5px;font-family:var(--mono);font-size:11px;display:none;z-index:3;white-space:nowrap}
+#help{position:absolute;left:12px;bottom:10px;color:var(--mute);font-size:11px;z-index:2;pointer-events:none}
+#loading{position:fixed;inset:0;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;z-index:50;transition:opacity .4s}
+#loading .bar{width:220px;height:3px;background:var(--line);border-radius:2px;overflow:hidden}
+#loading .bar i{display:block;height:100%;width:30%;background:var(--acc);animation:ld 1s infinite ease-in-out}
+@keyframes ld{0%{margin-left:-30%}100%{margin-left:100%}}
+#toggleSide{display:none}
+@media (max-width:760px){
+  #app{grid-template-columns:1fr;grid-template-rows:48px 1fr 46vh}
+  header .sub,header .stat{display:none}
+  #side{grid-row:3;border-right:0;border-top:1px solid var(--line)}
+  #stage{grid-row:2}
+  #info{width:210px;top:auto;bottom:10px}
+  #help{display:none}
+}
+</style>
+</head>
+<body>
+<div id="loading"><div style="font-weight:650;letter-spacing:.1em">RP1 · LOADING MODEL</div><div class="bar"><i></i></div></div>
+<div id="app">
+  <header>
+    <h1><b>RP1</b> HUMANOID · INTERACTIVE CAD</h1>
+    <span class="sub">RoboParty open-source platform · <span id="dofTxt"></span></span>
+    <span class="sp"></span>
+    <span class="stat" id="stat"></span>
+  </header>
+  <aside id="side">
+    <div class="tabs">
+      <button data-t="joints" class="on">Joints</button>
+      <button data-t="parts">Parts</button>
+      <button data-t="view">View</button>
+    </div>
+    <div class="pane on" id="p-joints">
+      <h3>Poses<i></i></h3>
+      <div class="btnrow" id="poses"></div>
+      <div class="chk" style="margin-top:10px"><input type="checkbox" id="mirror"><label for="mirror" style="cursor:pointer">Mirror left ⇄ right when dragging</label></div>
+      <div id="jointList"></div>
+    </div>
+    <div class="pane" id="p-parts">
+      <h3>Isolation<i></i></h3>
+      <div class="btnrow">
+        <button class="btn" id="showAll">Show all</button>
+        <button class="btn" id="isoSel">Isolate selected</button>
+        <button class="btn" id="hideSel">Hide selected</button>
+      </div>
+      <h3>Links<i></i></h3>
+      <div id="partList"></div>
+    </div>
+    <div class="pane" id="p-view">
+      <h3>Render mode<i></i></h3>
+      <div class="btnrow" id="modes"></div>
+      <h3>Colour<i></i></h3>
+      <div class="btnrow" id="colors"></div>
+      <h3>Explode<i></i></h3>
+      <div class="row"><label>Amount</label><input type="range" id="explode" min="0" max="1" step="0.01" value="0"><span class="v" id="explodeV">0%</span></div>
+      <h3>Section cut<i></i></h3>
+      <div class="btnrow" id="cutAxis"></div>
+      <div class="row"><label>Position</label><input type="range" id="cutPos" min="-1" max="1" step="0.005" value="0"><span class="v" id="cutV">off</span></div>
+      <div class="chk"><input type="checkbox" id="cutFlip"><label for="cutFlip" style="cursor:pointer">Flip cut side</label></div>
+      <h3>Scene<i></i></h3>
+      <div class="chk"><input type="checkbox" id="oEdges"><label for="oEdges" style="cursor:pointer">Edge overlay</label></div>
+      <div class="chk"><input type="checkbox" id="oAxes"><label for="oAxes" style="cursor:pointer">Joint axes</label></div>
+      <div class="chk"><input type="checkbox" id="oGrid" checked><label for="oGrid" style="cursor:pointer">Grid &amp; shadow</label></div>
+      <div class="chk"><input type="checkbox" id="oGround" checked><label for="oGround" style="cursor:pointer">Keep feet on ground</label></div>
+      <div class="chk"><input type="checkbox" id="oSpin"><label for="oSpin" style="cursor:pointer">Auto-rotate camera</label></div>
+      <div class="row"><label>Background</label><input type="range" id="bg" min="0" max="1" step="0.01" value="0"><span class="v"></span></div>
+      <h3>Camera<i></i></h3>
+      <div class="btnrow" id="views"></div>
+      <h3>Export<i></i></h3>
+      <div class="btnrow"><button class="btn" id="shot">Save PNG screenshot</button></div>
+    </div>
+  </aside>
+  <main id="stage">
+    <canvas id="c" tabindex="0"></canvas>
+    <div id="hud">
+      <button class="btn" id="bAnim" title="Space">▶ Walk cycle</button>
+      <button class="btn" id="bReset" title="R">⟲ Reset</button>
+      <button class="btn" id="bFit" title="F">⤢ Fit</button>
+    </div>
+    <div id="tip"></div>
+    <div id="info"></div>
+    <div id="help">Drag: orbit · Right-drag: pan · Wheel: zoom · Click a part to inspect · Space: walk · R: reset · F: fit</div>
+  </main>
+</div>
+
+<script type="importmap">
+{"imports":{
+ "three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+ "three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+}}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
+import {RoomEnvironment} from 'three/addons/environments/RoomEnvironment.js';
+import {toCreasedNormals} from 'three/addons/utils/BufferGeometryUtils.js';
+
+const DATA = /*__DATA__*/null;
+const $ = s => document.querySelector(s);
+const D2R = Math.PI/180;
+
+/* ---------- renderer / scene ---------- */
+const canvas = $('#c');
+const renderer = new THREE.WebGLRenderer({canvas, antialias:true, preserveDrawingBuffer:false});
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 0.95;
+renderer.localClippingEnabled = true;
+
+const scene = new THREE.Scene();
+const bgA = new THREE.Color(0x0a0d14), bgB = new THREE.Color(0xdfe6ee);
+scene.background = bgA.clone();
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+scene.environmentIntensity = 0.55;
+
+const camera = new THREE.PerspectiveCamera(36, 1, 0.01, 50);
+const controls = new OrbitControls(camera, canvas);
+controls.enableDamping = true; controls.dampingFactor = 0.09;
+controls.autoRotateSpeed = 1.2;
+
+const key = new THREE.DirectionalLight(0xffffff, 1.5);
+key.position.set(1.6, 3, 1.8); key.castShadow = true;
+key.shadow.mapSize.set(2048, 2048);
+Object.assign(key.shadow.camera, {left:-1.4, right:1.4, top:1.4, bottom:-1.4, near:0.5, far:8});
+key.shadow.bias = -0.0004; key.shadow.normalBias = 0.01;
+scene.add(key);
+const rim = new THREE.DirectionalLight(0x22d3ee, 1.2); rim.position.set(-2, 1.5, -2.5); scene.add(rim);
+const fill = new THREE.DirectionalLight(0xf472b6, 0.6); fill.position.set(-2, 0.8, 2.5); scene.add(fill);
+
+const grid = new THREE.GridHelper(4, 40, 0x22d3ee, 0x1e2a3d);
+grid.material.transparent = true; grid.material.opacity = 0.55;
+scene.add(grid);
+const shadowPlane = new THREE.Mesh(new THREE.PlaneGeometry(6, 6), new THREE.ShadowMaterial({opacity:0.35}));
+shadowPlane.rotation.x = -Math.PI/2; shadowPlane.position.y = 0.0005; shadowPlane.receiveShadow = true;
+scene.add(shadowPlane);
+
+/* ---------- decode meshes ---------- */
+const bin = Uint8Array.from(atob(DATA.bin), c => c.charCodeAt(0)).buffer;
+
+/* ---------- build kinematic tree (URDF is Z-up; three is Y-up) ---------- */
+const robotRoot = new THREE.Group();            // ground-lift lives here
+const urdfFrame = new THREE.Group();            // Z-up -> Y-up
+urdfFrame.rotation.x = -Math.PI/2;
+robotRoot.add(urdfFrame); scene.add(robotRoot);
+
+const links = {};   // name -> {name, group, mesh, geo, mat, info, joint, ...}
+const joints = [];  // movable joints
+const jointByChild = {};
+
+function groupOf(n){
+  if(/hip|knee|ankle/.test(n)) return 'legs';
+  if(/shoulder|elbow|wrist/.test(n)) return 'arms';
+  if(/waist/.test(n)) return 'waist';
+  return 'base';
+}
+const GROUP_COL = {legs:0x22d3ee, arms:0xf472b6, waist:0xa3e635, base:0xfbbf24};
+
+for(const [name, info] of Object.entries(DATA.links)){
+  const p = DATA.parts[name];
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(bin, p.vo, p.vn*3), 3));
+  g.setIndex(new THREE.BufferAttribute(new Uint32Array(bin, p.io, p.fn*3), 1));
+  const geo = toCreasedNormals(g, 35*D2R);
+  geo.computeBoundingBox(); geo.computeBoundingSphere();
+  g.dispose();
+  const mat = new THREE.MeshStandardMaterial({
+    color:new THREE.Color(...info.color), metalness:0.4, roughness:0.5, side:THREE.FrontSide
+  });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.castShadow = true; mesh.receiveShadow = false;
+  mesh.userData.link = name;
+  mesh.position.set(...info.vorigin);
+  mesh.rotation.set(...info.vrpy, 'ZYX');
+  const grp = new THREE.Group(); grp.name = name; grp.add(mesh);
+  links[name] = {name, group:grp, mesh, geo, mat, info, tris:p.fn, baseColor:mat.color.clone(),
+                 kind:groupOf(name), center:geo.boundingBox.getCenter(new THREE.Vector3()), hidden:false};
+}
+
+const rootName = DATA.joints.find(j => !DATA.joints.some(k => k.child === j.parent)).parent;
+urdfFrame.add(links[rootName].group);
+for(const j of DATA.joints){
+  const origin = new THREE.Group();
+  origin.position.set(...j.xyz); origin.rotation.set(...j.rpy, 'ZYX');
+  const motion = new THREE.Group();
+  origin.add(motion); motion.add(links[j.child].group);
+  links[j.parent].group.add(origin);
+  const axis = new THREE.Vector3(...j.axis).normalize();
+  const J = {...j, axisV:axis, origin, motion, value:0, kind:groupOf(j.child), label:j.name.replace(/_joint$/,'')};
+  links[j.child].joint = J; jointByChild[j.child] = J;
+  if(j.type === 'revolute' || j.type === 'continuous') joints.push(J);
+}
+$('#dofTxt').textContent = `${joints.length} DOF · ${Object.keys(links).length} links · ${DATA.name}`;
+
+function setJoint(J, v){
+  v = Math.min(J.upper, Math.max(J.lower, v));
+  J.value = v;
+  J.motion.quaternion.setFromAxisAngle(J.axisV, v);
+}
+
+/* ---------- world metrics ---------- */
+const tmpBox = new THREE.Box3(), unionBox = new THREE.Box3();
+function lift(){
+  if($('#oGround').checked){
+    robotRoot.position.y = 0; robotRoot.updateMatrixWorld(true);
+    unionBox.makeEmpty();
+    for(const L of Object.values(links)){ if(L.hidden) continue;
+      tmpBox.copy(L.geo.boundingBox).applyMatrix4(L.mesh.matrixWorld); unionBox.union(tmpBox); }
+    if(!unionBox.isEmpty()) robotRoot.position.y = -unionBox.min.y;
+  } else robotRoot.position.y = 0;
+  robotRoot.updateMatrixWorld(true);
+}
+function robotBounds(){
+  lift();
+  unionBox.makeEmpty();
+  for(const L of Object.values(links)){
+    if(L.hidden) continue;
+    L.mesh.updateWorldMatrix(true, false);
+    tmpBox.copy(L.geo.boundingBox).applyMatrix4(L.mesh.matrixWorld);
+    unionBox.union(tmpBox);
+  }
+  return unionBox;
+}
+
+/* ---------- explode ---------- */
+let explode = 0, exploreCenter = new THREE.Vector3();
+function applyExplode(){
+  for(const L of Object.values(links)) L.mesh.position.set(...L.info.vorigin);
+  if(explode <= 0) return;
+  robotRoot.updateMatrixWorld(true);
+  const c = new THREE.Vector3(), wc = new THREE.Vector3(), cw = new THREE.Vector3(), a = new THREE.Vector3(), b = new THREE.Vector3();
+  const all = Object.values(links);
+  const centers = all.map(L => L.center.clone().applyMatrix4(L.mesh.matrixWorld));
+  c.set(0,0,0); centers.forEach(p => c.add(p)); c.divideScalar(centers.length);
+  all.forEach((L, i) => {
+    wc.copy(centers[i]);
+    const dir = wc.clone().sub(c);
+    dir.y *= 1.2;
+    cw.copy(wc).addScaledVector(dir, explode*0.9);
+    a.copy(wc); b.copy(cw);
+    L.group.worldToLocal(a); L.group.worldToLocal(b);
+    L.mesh.position.add(b.sub(a));
+  });
+}
+
+/* ---------- poses ---------- */
+const mirrorSign = (L, R) => {
+  const m = new THREE.Vector3(-L.axisV.x, L.axisV.y, -L.axisV.z);
+  return m.dot(R.axisV) >= 0 ? 1 : -1;
+};
+const jn = n => joints.find(j => j.name === n);
+const pairs = []; // [left, right, sign]
+for(const L of joints) if(L.name.startsWith('left_')){
+  const R = jn(L.name.replace('left_','right_'));
+  if(R) pairs.push([L, R, mirrorSign(L, R)]);
+}
+const side = {};   // name -> {mirror, sign}
+pairs.forEach(([L,R,s]) => { side[L.name] = {mirror:R, sign:s}; side[R.name] = {mirror:L, sign:s}; });
+
+const SUF = k => `_${k}_joint`;
+function pose(Lvals = {}, Rvals = Lvals, mid = {}){
+  const o = {};
+  for(const [k,v] of Object.entries(Lvals)) o['left_'+k+'_joint'] = v;
+  for(const [k,v] of Object.entries(Rvals)){
+    const R = jn('right_'+k+'_joint'), L = jn('left_'+k+'_joint');
+    o['right_'+k+'_joint'] = v * mirrorSign(L, R);
+  }
+  for(const [k,v] of Object.entries(mid)) o[k+'_joint'] = v;
+  return o;
+}
+const POSES = {
+  'Zero':      pose(),
+  'Ready':     pose({hip_pitch:-0.28, knee:-0.55, ankle_pitch:-0.27, shoulder_pitch:0.15, shoulder_roll:0.18, elbow:0.35}),
+  'T-pose':    pose({shoulder_roll:1.5708}),
+  'Arms up':   pose({shoulder_roll:2.7, elbow:0}),
+  'Squat':     pose({hip_pitch:-0.85, knee:-1.7, ankle_pitch:-0.78, shoulder_pitch:-0.9, shoulder_roll:0.15, elbow:0.4}),
+  'Stride':    pose({hip_pitch:-0.55, knee:-0.7, ankle_pitch:-0.15, shoulder_pitch:0.5, shoulder_roll:0.2, elbow:0.5},
+                    {hip_pitch:0.3, knee:-0.1, ankle_pitch:-0.2, shoulder_pitch:-0.5, shoulder_roll:0.2, elbow:0.5}),
+  'Wave':      pose({shoulder_roll:0.15, elbow:0.2}, {shoulder_roll:2.0, shoulder_pitch:0.2, elbow:-1.0, shoulder_yaw:0.0}),
+  'Kneel':     pose({hip_pitch:-1.5, knee:-1.8, ankle_pitch:0.2}, {hip_pitch:0.0, knee:-2.7, ankle_pitch:0.2, hip_roll:0}),
+};
+let tween = null;
+function goPose(p, dur = 0.7){
+  stopAnim();
+  tween = {t:0, dur, from:joints.map(j => j.value), to:joints.map(j => p[j.name] ?? 0)};
+}
+function stepTween(dt){
+  if(!tween) return false;
+  tween.t += dt;
+  const k = Math.min(1, tween.t/tween.dur), e = k<.5 ? 2*k*k : 1-Math.pow(-2*k+2,2)/2;
+  joints.forEach((j,i) => setJoint(j, tween.from[i] + (tween.to[i]-tween.from[i])*e));
+  syncSliders();
+  if(k >= 1) tween = null;
+  return true;
+}
+
+/* ---------- walk cycle ---------- */
+let animating = false, phase = 0;
+function stopAnim(){ animating = false; $('#bAnim').textContent = '▶ Walk cycle'; $('#bAnim').classList.remove('on'); }
+function toggleAnim(){
+  if(animating){ stopAnim(); return; }
+  tween = null; animating = true;
+  $('#bAnim').textContent = '❚❚ Pause'; $('#bAnim').classList.add('on');
+}
+function walkPose(ph){
+  const o = {}, leg = (pre, p, sgn) => {
+    const hip = -0.42*Math.sin(p), swing = Math.max(0, Math.cos(p));
+    const knee = -0.18 - 0.85*swing, ank = -hip + knee*0.9 - 0.02;
+    return {hip, knee, ank, sh: 0.55*Math.sin(p)*-1*-1, el: 0.45 + 0.25*Math.sin(p)};
+  };
+  const L = leg('left', ph), R = leg('right', ph + Math.PI);
+  const set = (side, d, sh) => {
+    const sgnOf = k => side === 'left' ? 1 : mirrorSign(jn('left_'+k+'_joint'), jn('right_'+k+'_joint'));
+    o[side+'_hip_pitch_joint'] = d.hip * sgnOf('hip_pitch');
+    o[side+'_knee_joint'] = d.knee * sgnOf('knee');
+    o[side+'_ankle_pitch_joint'] = d.ank * sgnOf('ankle_pitch');
+    o[side+'_shoulder_pitch_joint'] = sh * sgnOf('shoulder_pitch');
+    o[side+'_elbow_joint'] = (0.5 + 0.3*Math.abs(sh)) * sgnOf('elbow');
+    o[side+'_shoulder_roll_joint'] = 0.16 * sgnOf('shoulder_roll');
+    o[side+'_hip_roll_joint'] = 0;
+  };
+  set('left', L, 0.5*Math.sin(ph));
+  set('right', R, 0.5*Math.sin(ph + Math.PI));
+  o.waist_yaw_joint = 0.14*Math.sin(ph);
+  return o;
+}
+
+/* ---------- UI: joints ---------- */
+const jointList = $('#jointList'), sliders = new Map();
+const GROUPS = [['Legs','l',j=>j.kind==='legs'], ['Waist','w',j=>j.kind==='waist'], ['Arms','a',j=>j.kind==='arms']];
+for(const [title, cls, f] of GROUPS){
+  const h = document.createElement('h3'); h.innerHTML = `${title}<i></i>`; jointList.appendChild(h);
+  for(const J of joints.filter(f)){
+    const el = document.createElement('div'); el.className = `joint grp-${cls}`;
+    el.innerHTML = `<div class="top"><span class="nm" title="Double-click to zero"></span><span class="val"></span></div>
+      <input type="range" min="${(J.lower/D2R).toFixed(1)}" max="${(J.upper/D2R).toFixed(1)}" step="0.5" value="0">
+      <div class="lim"><span>${(J.lower/D2R).toFixed(0)}°</span><span>${J.effort.toFixed(0)} N·m</span><span>${(J.upper/D2R).toFixed(0)}°</span></div>`;
+    el.querySelector('.nm').textContent = J.label.replace(/_/g,' ');
+    const inp = el.querySelector('input'), val = el.querySelector('.val');
+    inp.addEventListener('input', () => {
+      stopAnim(); tween = null;
+      const v = +inp.value*D2R;
+      setJoint(J, v);
+      if($('#mirror').checked && side[J.name]){
+        const m = side[J.name]; setJoint(m.mirror, v*m.sign);
+      }
+      syncSliders();
+    });
+    el.querySelector('.nm').addEventListener('dblclick', () => { setJoint(J,0); syncSliders(); });
+    el.addEventListener('mouseenter', () => hoverLink(J.child, true));
+    el.addEventListener('mouseleave', () => hoverLink(null));
+    jointList.appendChild(el);
+    sliders.set(J, {inp, val});
+  }
+}
+function syncSliders(){
+  for(const [J,{inp,val}] of sliders){
+    const d = J.value/D2R;
+    if(document.activeElement !== inp) inp.value = d;
+    val.textContent = d.toFixed(1)+'°';
+  }
+  if(sel) renderInfo();
+}
+const posesEl = $('#poses');
+for(const name of Object.keys(POSES)){
+  const b = document.createElement('button'); b.className = 'btn'; b.textContent = name;
+  b.onclick = () => goPose(POSES[name]); posesEl.appendChild(b);
+}
+
+/* ---------- UI: parts ---------- */
+const partList = $('#partList'), partEls = {};
+const order = Object.keys(links).sort((a,b) => ['base','waist','legs','arms'].indexOf(links[a].kind) - ['base','waist','legs','arms'].indexOf(links[b].kind));
+for(const n of order){
+  const L = links[n];
+  const el = document.createElement('div'); el.className = 'part';
+  el.innerHTML = `<span class="dot" style="background:#${GROUP_COL[L.kind].toString(16).padStart(6,'0')}"></span><span class="n"></span><span class="m">${L.info.mass.toFixed(2)} kg</span><button class="eye" title="Toggle visibility">👁</button>`;
+  el.querySelector('.n').textContent = n.replace(/_link$/,'').replace(/_/g,' ');
+  el.onclick = e => { if(e.target.classList.contains('eye')) return; select(n, true); };
+  el.onmouseenter = () => hoverLink(n, true); el.onmouseleave = () => hoverLink(null);
+  el.querySelector('.eye').onclick = e => { setHidden(n, !L.hidden); };
+  partList.appendChild(el); partEls[n] = el;
+}
+function setHidden(n, h){
+  const L = links[n]; L.hidden = h; L.mesh.visible = !h;
+  if(L.edges) L.edges.visible = !h && $('#oEdges').checked;
+  partEls[n].querySelector('.eye').classList.toggle('off', h);
+}
+$('#showAll').onclick = () => Object.keys(links).forEach(n => setHidden(n, false));
+$('#hideSel').onclick = () => { if(sel) setHidden(sel, true); };
+$('#isoSel').onclick = () => { if(sel) Object.keys(links).forEach(n => setHidden(n, n !== sel)); };
+
+/* ---------- UI: view ---------- */
+let mode = 'Solid', colorMode = 'Original', cutAxis = null;
+const MODES = ['Solid','X-ray','Wireframe'];
+const COLORS = ['Original','By group','Mass heat','Neon'];
+function btnGroup(el, items, current, cb){
+  items.forEach(it => {
+    const b = document.createElement('button'); b.className = 'btn'+(it===current?' on':''); b.textContent = it;
+    b.onclick = () => { el.querySelectorAll('.btn').forEach(x => x.classList.toggle('on', x===b)); cb(it); };
+    el.appendChild(b);
+  });
+}
+btnGroup($('#modes'), MODES, mode, m => { mode = m; applyMaterials(); });
+btnGroup($('#colors'), COLORS, colorMode, c => { colorMode = c; applyMaterials(); });
+
+const masses = Object.values(links).map(l => l.info.mass), mMin = Math.min(...masses), mMax = Math.max(...masses);
+function heat(t){ // blue -> cyan -> yellow -> red
+  const stops = [[0.1,0.2,0.9],[0.1,0.85,0.9],[0.98,0.85,0.2],[0.95,0.2,0.2]];
+  const x = Math.min(0.9999, Math.max(0, t))*3, i = Math.floor(x), f = x-i;
+  return new THREE.Color(...stops[i].map((a,k) => a+(stops[i+1][k]-a)*f));
+}
+const NEON = {legs:0x22d3ee, arms:0xff3df0, waist:0xa3ff3a, base:0xffd400};
+const clipPlane = new THREE.Plane(new THREE.Vector3(1,0,0), 0);
+function applyMaterials(){
+  for(const L of Object.values(links)){
+    const m = L.mat;
+    if(colorMode === 'Original') m.color.copy(L.baseColor);
+    else if(colorMode === 'By group') m.color.setHex(GROUP_COL[L.kind]).lerp(L.baseColor, 0.25);
+    else if(colorMode === 'Mass heat') m.color.copy(heat((L.info.mass-mMin)/(mMax-mMin)));
+    else m.color.setHex(NEON[L.kind]);
+    const neon = colorMode === 'Neon';
+    m.metalness = neon ? 0.15 : 0.4; m.roughness = neon ? 0.4 : 0.5;
+    m.wireframe = mode === 'Wireframe';
+    m.transparent = mode === 'X-ray'; m.opacity = mode === 'X-ray' ? 0.28 : 1;
+    m.depthWrite = mode !== 'X-ray';
+    m.side = THREE.DoubleSide;
+    m.clippingPlanes = cutAxis ? [clipPlane] : [];
+    m.needsUpdate = true;
+    L.mesh.castShadow = mode === 'Solid';
+    if(L.edges){ L.edges.material.clippingPlanes = m.clippingPlanes; L.edges.material.needsUpdate = true; }
+    m.emissive.setHex(0x000000);
+  }
+  refreshHighlight();
+}
+
+/* section cut */
+const AXES = {X:new THREE.Vector3(1,0,0), Y:new THREE.Vector3(0,0,1), Z:new THREE.Vector3(0,1,0)}; // URDF axes -> world
+const cutLabels = {X:'X · front/back', Y:'Y · left/right', Z:'Z · height'};
+btnGroup($('#cutAxis'), ['Off','X','Y','Z'], 'Off', a => { cutAxis = a === 'Off' ? null : a; updateCut(); applyMaterials(); });
+['#cutPos','#cutFlip'].forEach(s => $(s).addEventListener('input', updateCut));
+function updateCut(){
+  if(!cutAxis){ $('#cutV').textContent = 'off'; return; }
+  const b = robotBounds();
+  const n = AXES[cutAxis].clone();
+  // map URDF axis to world: urdf Y -> world -Z (so "left" stays left when viewed from the front)
+  if(cutAxis === 'Y') n.set(0,0,-1);
+  const flip = $('#cutFlip').checked ? -1 : 1;
+  const comp = n.x ? 'x' : n.y ? 'y' : 'z';
+  const lo = b.min[comp], hi = b.max[comp];
+  const t = +$('#cutPos').value, pos = (lo+hi)/2 + t*(hi-lo)/2;
+  const nn = n.clone().multiplyScalar(-flip);
+  clipPlane.normal.copy(nn);
+  const p0 = new THREE.Vector3(); p0[comp] = pos;
+  clipPlane.constant = -nn.dot(p0);
+  $('#cutV').textContent = (pos*1000).toFixed(0)+'mm';
+}
+$('#explode').addEventListener('change', () => fit());
+$('#explode').addEventListener('input', e => { explode = +e.target.value; $('#explodeV').textContent = Math.round(explode*100)+'%'; });
+
+/* edges overlay */
+import {EdgesGeometry} from 'three';
+function ensureEdges(){
+  for(const L of Object.values(links)) if(!L.edges){
+    const eg = new EdgesGeometry(L.geo, 38);
+    L.edges = new THREE.LineSegments(eg, new THREE.LineBasicMaterial({color:0x0b1220, transparent:true, opacity:0.55}));
+    L.edges.raycast = () => {};
+    L.mesh.add(L.edges);
+  }
+}
+$('#oEdges').addEventListener('change', e => {
+  if(e.target.checked) ensureEdges();
+  for(const L of Object.values(links)) if(L.edges) L.edges.visible = e.target.checked && !L.hidden;
+  applyMaterials();
+});
+/* joint axes */
+const axisHelpers = [];
+$('#oAxes').addEventListener('change', e => {
+  if(!axisHelpers.length) for(const J of joints){
+    const g = new THREE.Group();
+    const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints([J.axisV.clone().multiplyScalar(-0.07), J.axisV.clone().multiplyScalar(0.07)]),
+      new THREE.LineBasicMaterial({color:GROUP_COL[J.kind], depthTest:false, transparent:true}));
+    const tip = new THREE.Mesh(new THREE.ConeGeometry(0.008, 0.02, 12), new THREE.MeshBasicMaterial({color:GROUP_COL[J.kind], depthTest:false}));
+    tip.position.copy(J.axisV).multiplyScalar(0.07);
+    tip.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0), J.axisV);
+    line.renderOrder = tip.renderOrder = 10; tip.raycast = line.raycast = () => {};
+    g.add(line, tip); J.motion.add(g); axisHelpers.push(g);
+  }
+  axisHelpers.forEach(g => g.visible = e.target.checked);
+});
+$('#oGrid').addEventListener('change', e => { grid.visible = shadowPlane.visible = e.target.checked; });
+$('#oSpin').addEventListener('change', e => { controls.autoRotate = e.target.checked; });
+$('#bg').addEventListener('input', e => {
+  const t = +e.target.value;
+  scene.background.copy(bgA).lerp(bgB, t);
+  grid.material.opacity = 0.55*(1-t*0.5);
+  shadowPlane.material.opacity = 0.35 + t*0.1;
+});
+
+/* camera presets */
+let fitDist = 2;
+const VIEWS = {
+  Iso:[1.0,0.55,1.15], Front:[1,0.05,0], Back:[-1,0.05,0], Left:[0,0.05,-1], Right:[0,0.05,1], Top:[0.001,1,0]
+};
+function setView(name){
+  const v = new THREE.Vector3(...VIEWS[name]).normalize();
+  const b = robotBounds(), c = b.getCenter(new THREE.Vector3());
+  controls.target.copy(c);
+  camera.position.copy(c).addScaledVector(v, fitDist);
+  controls.update();
+}
+function fit(){
+  const b = robotBounds(), s = b.getSize(new THREE.Vector3()), r = Math.max(s.x, s.y, s.z)*0.5;
+  fitDist = Math.max(0.6, r/Math.tan(camera.fov*D2R/2)*1.25);
+  const dir = camera.position.clone().sub(controls.target).normalize();
+  controls.target.copy(b.getCenter(new THREE.Vector3()));
+  camera.position.copy(controls.target).addScaledVector(dir, fitDist);
+  controls.update();
+}
+const viewsEl = $('#views');
+Object.keys(VIEWS).forEach(n => { const b = document.createElement('button'); b.className='btn'; b.textContent=n; b.onclick=()=>setView(n); viewsEl.appendChild(b); });
+$('#shot').onclick = () => {
+  renderer.render(scene, camera);
+  const a = document.createElement('a'); a.download = 'rp1-view.png'; a.href = canvas.toDataURL('image/png'); a.click();
+};
+
+/* ---------- selection / hover ---------- */
+const ray = new THREE.Raycaster(), ndc = new THREE.Vector2();
+let sel = null, hov = null, hovFromUI = false;
+function pick(ev){
+  const r = canvas.getBoundingClientRect();
+  ndc.set(((ev.clientX-r.left)/r.width)*2-1, -((ev.clientY-r.top)/r.height)*2+1);
+  ray.setFromCamera(ndc, camera);
+  const meshes = Object.values(links).filter(l => !l.hidden).map(l => l.mesh);
+  const hit = ray.intersectObjects(meshes, false);
+  for(const h of hit){
+    if(cutAxis && clipPlane.distanceToPoint(h.point) < 0) continue;  // clipped away
+    return h.object.userData.link;
+  }
+  return null;
+}
+function refreshHighlight(){
+  for(const L of Object.values(links)){
+    const s = L.name === sel, h = L.name === hov;
+    L.mat.emissive.setHex(s ? 0x0a8fa6 : h ? 0x0b5f70 : 0x000000);
+    L.mat.emissiveIntensity = 1;
+    if(mode === 'X-ray') L.mat.opacity = (s||h) ? 0.8 : 0.28;
+  }
+  for(const [n,el] of Object.entries(partEls)) el.classList.toggle('sel', n === sel);
+}
+function hoverLink(n, fromUI){ hov = n; hovFromUI = !!fromUI && !!n; refreshHighlight(); }
+function select(n, fromUI){
+  sel = n; refreshHighlight(); renderInfo();
+  if(n && fromUI && !links[n].hidden){ /* keep camera */ }
+  if(n) partEls[n].scrollIntoView({block:'nearest'});
+}
+function renderInfo(){
+  const el = $('#info');
+  if(!sel){ el.classList.remove('on'); return; }
+  const L = links[sel], J = L.joint, sz = L.geo.boundingBox.getSize(new THREE.Vector3());
+  const f = (x, d=0) => (x*1000).toFixed(d);
+  el.innerHTML = `<h2>${sel}</h2><div style="color:var(--mute);font-size:11px;text-transform:uppercase;letter-spacing:.1em">${L.kind}</div>
+  <div class="k">
+    <span>Mass</span><span>${L.info.mass.toFixed(3)} kg</span>
+    <span>Size (mm)</span><span>${f(sz.x)} × ${f(sz.y)} × ${f(sz.z)}</span>
+    <span>Triangles</span><span>${L.tris.toLocaleString()}</span>
+    ${J ? `<span>Joint</span><span>${J.label}</span>
+    <span>Parent</span><span>${J.parent.replace(/_link$/,'')}</span>
+    <span>Axis</span><span>${J.axis.map(a=>a.toFixed(2)).join(' ')}</span>
+    <span>Range</span><span>${(J.lower/D2R).toFixed(0)}° … ${(J.upper/D2R).toFixed(0)}°</span>
+    <span>Effort / vel</span><span>${J.effort.toFixed(0)} N·m · ${J.velocity.toFixed(1)} r/s</span>
+    <span>Angle</span><span style="color:var(--acc)">${(J.value/D2R).toFixed(1)}°</span>` : `<span>Joint</span><span>floating base</span>`}
+  </div>
+  <div class="btnrow"><button class="btn" data-a="iso">Isolate</button><button class="btn" data-a="hide">Hide</button><button class="btn" data-a="focus">Focus</button><button class="btn" data-a="x">✕</button></div>`;
+  el.classList.add('on');
+  el.querySelector('[data-a=iso]').onclick = () => Object.keys(links).forEach(n => setHidden(n, n !== sel));
+  el.querySelector('[data-a=hide]').onclick = () => setHidden(sel, true);
+  el.querySelector('[data-a=focus]').onclick = () => {
+    const b = new THREE.Box3().setFromObject(L.mesh), c = b.getCenter(new THREE.Vector3());
+    const r = b.getSize(new THREE.Vector3()).length()*0.5;
+    const d = camera.position.clone().sub(controls.target).normalize();
+    focusAnim = {t:0, from:{p:camera.position.clone(), t:controls.target.clone()},
+                 to:{t:c, p:c.clone().addScaledVector(d, Math.max(0.25, r/Math.tan(camera.fov*D2R/2)*1.3))}};
+  };
+  el.querySelector('[data-a=x]').onclick = () => select(null);
+}
+let focusAnim = null, down = null, lastPick = 0;
+canvas.addEventListener('pointerdown', e => { down = {x:e.clientX, y:e.clientY}; });
+canvas.addEventListener('pointerup', e => {
+  if(down && Math.hypot(e.clientX-down.x, e.clientY-down.y) < 4) select(pick(e));
+  down = null;
+});
+const tip = $('#tip');
+canvas.addEventListener('pointermove', e => {
+  if(e.buttons || e.pointerType === 'touch'){ tip.style.display = 'none'; return; }
+  const now = performance.now(); if(now - lastPick < 50) return; lastPick = now;
+  const n = pick(e);
+  if(!hovFromUI){ hov = n; refreshHighlight(); }
+  canvas.style.cursor = n ? 'pointer' : 'default';
+  if(n){
+    const r = canvas.getBoundingClientRect();
+    tip.textContent = n.replace(/_link$/,'').replace(/_/g,' ');
+    tip.style.left = (e.clientX-r.left+14)+'px'; tip.style.top = (e.clientY-r.top+14)+'px'; tip.style.display = 'block';
+  } else tip.style.display = 'none';
+});
+canvas.addEventListener('pointerleave', () => { tip.style.display = 'none'; if(!hovFromUI){ hov = null; refreshHighlight(); } });
+
+/* ---------- tabs / hud / keys ---------- */
+document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('.tabs button').forEach(x => x.classList.toggle('on', x===b));
+  document.querySelectorAll('.pane').forEach(p => p.classList.toggle('on', p.id === 'p-'+b.dataset.t));
+});
+$('#bAnim').onclick = toggleAnim;
+$('#bReset').onclick = () => { goPose(POSES.Zero); $('#explode').value = 0; explode = 0; $('#explodeV').textContent='0%'; setView('Iso'); };
+$('#bFit').onclick = () => { fit(); };
+addEventListener('keydown', e => {
+  if(e.target.tagName === 'INPUT' && e.target.type !== 'checkbox' && e.target.type !== 'range') return;
+  if(e.code === 'Space'){ e.preventDefault(); toggleAnim(); }
+  else if(e.key === 'r' || e.key === 'R') $('#bReset').click();
+  else if(e.key === 'f' || e.key === 'F') fit();
+  else if(e.key === 'Escape') select(null);
+  else if('123456'.includes(e.key) && e.key) setView(Object.keys(VIEWS)[+e.key-1]);
+});
+
+/* ---------- main loop ---------- */
+function resize(){
+  const r = $('#stage').getBoundingClientRect();
+  renderer.setSize(r.width, r.height, false);
+  camera.aspect = r.width/r.height; camera.updateProjectionMatrix();
+}
+new ResizeObserver(resize).observe($('#stage')); resize();
+
+const clock = new THREE.Clock();
+let statT = 0, frames = 0;
+function frame(){
+  const dt = Math.min(0.05, clock.getDelta());
+  if(animating){
+    phase += dt*3.2;
+    const p = walkPose(phase);
+    joints.forEach(j => setJoint(j, p[j.name] ?? 0));
+    syncSliders();
+  } else stepTween(dt);
+
+  applyExplode();
+  lift();
+  if(cutAxis) updateCutLive();
+
+  if(focusAnim){
+    focusAnim.t = Math.min(1, focusAnim.t + dt/0.6);
+    const e = 1-Math.pow(1-focusAnim.t, 3);
+    camera.position.lerpVectors(focusAnim.from.p, focusAnim.to.p, e);
+    controls.target.lerpVectors(focusAnim.from.t, focusAnim.to.t, e);
+    if(focusAnim.t >= 1) focusAnim = null;
+  }
+  controls.update();
+  renderer.render(scene, camera);
+
+  frames++; statT += dt;
+  if(statT > 0.5){ $('#stat').textContent = `${Math.round(frames/statT)} fps · ${renderer.info.render.triangles.toLocaleString()} tris`; frames = 0; statT = 0; }
+  requestAnimationFrame(frame);
+}
+function updateCutLive(){ /* keep plane valid as the robot moves */ updateCut(); }
+
+/* ---------- boot ---------- */
+joints.forEach(j => setJoint(j, 0));
+goPose(POSES.Ready, 0.01); stepTween(1);
+syncSliders(); applyMaterials();
+robotRoot.updateMatrixWorld(true);
+fitDist = 2.2;
+fit(); setView('Iso'); fit();
+$('#loading').style.opacity = 0; setTimeout(() => $('#loading').remove(), 450);
+window.__rp1 = {THREE, scene, camera, links, joints, goPose, POSES, setView, select};
+{ // optional deep-link: #pose=T-pose&view=Front&color=Neon&mode=X-ray
+  const q = new URLSearchParams(location.hash.slice(1));
+  const clickBtn = (sel, txt) => [...document.querySelectorAll(sel+' .btn')].find(b => b.textContent === txt)?.click();
+  if(q.get('pose') && POSES[q.get('pose')]){ goPose(POSES[q.get('pose')], 0.01); stepTween(1); syncSliders(); }
+  if(q.get('color')) clickBtn('#colors', q.get('color'));
+  if(q.get('mode')) clickBtn('#modes', q.get('mode'));
+  if(q.get('explode')){ $('#explode').value = q.get('explode'); $('#explode').dispatchEvent(new Event('input')); applyExplode(); }
+  if(q.get('view')) setView(q.get('view'));
+  fit();
+  if(q.get('sel')) select(q.get('sel'));
+}
+frame();
+</script>
+</body>
+</html>
