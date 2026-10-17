@@ -102,6 +102,7 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;border:0;border-radiu
     <div class="tabs">
       <button data-t="joints" class="on">Joints</button>
       <button data-t="parts">Parts</button>
+      <button data-t="elec">Electrical</button>
       <button data-t="view">View</button>
     </div>
     <div class="pane on" id="p-joints">
@@ -119,6 +120,15 @@ input[type=range]::-moz-range-thumb{width:14px;height:14px;border:0;border-radiu
       </div>
       <h3>Links<i></i></h3>
       <div id="partList"></div>
+    </div>
+    <div class="pane" id="p-elec">
+      <h3>Layer<i></i></h3>
+      <div class="chk"><input type="checkbox" id="eShow" checked><label for="eShow" style="cursor:pointer">Show electrical components</label></div>
+      <div class="row"><label>Structure</label><input type="range" id="sOp" min="0.05" max="1" step="0.01" value="0.4"><span class="v" id="sOpV">40%</span></div>
+      <div class="btnrow"><button class="btn" id="eOnly">Electronics only</button><button class="btn" id="eSolid">Solid structure</button></div>
+      <h3>Components<i></i></h3>
+      <div id="elecList"></div>
+      <p style="color:var(--mute);font-size:11px;margin-top:14px">Boards use the real STEP models from the RoboParty RP1_hardware repo. Placement is approximate (no electrical assembly is published). Blue, orange and grey blocks are proxies for parts without CAD (batteries, fans).</p>
     </div>
     <div class="pane" id="p-view">
       <h3>Render mode<i></i></h3>
@@ -168,8 +178,10 @@ import * as THREE from 'three';
 import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
 import {RoomEnvironment} from 'three/addons/environments/RoomEnvironment.js';
 import {toCreasedNormals} from 'three/addons/utils/BufferGeometryUtils.js';
+import {RoundedBoxGeometry} from 'three/addons/geometries/RoundedBoxGeometry.js';
 
 const DATA = /*__DATA__*/null;
+const ELEC = /*__ELEC__*/null;
 const $ = s => document.querySelector(s);
 const D2R = Math.PI/180;
 
@@ -249,7 +261,8 @@ for(const [name, info] of Object.entries(DATA.links)){
   mesh.position.set(...info.vorigin);
   mesh.rotation.set(...info.vrpy, 'ZYX');
   const grp = new THREE.Group(); grp.name = name; grp.add(mesh);
-  links[name] = {name, group:grp, mesh, geo, mat, info, tris:p.fn, baseColor:mat.color.clone(),
+  const mount = new THREE.Group(); grp.add(mount);
+  links[name] = {name, group:grp, mount, mesh, geo, mat, info, tris:p.fn, baseColor:mat.color.clone(),
                  kind:groupOf(name), center:geo.boundingBox.getCenter(new THREE.Vector3()), hidden:false};
 }
 
@@ -268,6 +281,94 @@ for(const j of DATA.joints){
 }
 $('#dofTxt').textContent = `${joints.length} DOF · ${Object.keys(links).length} links · ${DATA.name}`;
 
+/* ---------- electrical components ---------- */
+const ebin = Uint8Array.from(atob(ELEC.bin), c => c.charCodeAt(0)).buffer;
+const zeroOrigin = {};
+(() => { const kids = {}; DATA.joints.forEach(j => (kids[j.parent] = kids[j.parent] || []).push(j));
+  (function walk(n, p){ zeroOrigin[n] = p; (kids[n]||[]).forEach(j => walk(j.child, p.clone().add(new THREE.Vector3(...j.xyz)))); })(rootName, new THREE.Vector3()); })();
+const basisQuat = (ax, ay) => { const x = new THREE.Vector3(...ax).normalize(), y = new THREE.Vector3(...ay).normalize(), z = new THREE.Vector3().crossVectors(x, y);
+  return new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, y, z)); };
+const boardGeo = {};
+function getBoardGeo(key){
+  if(boardGeo[key]) return boardGeo[key];
+  const b = ELEC.boards[key], g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(ebin, b.vo, b.vn*3), 3));
+  g.setAttribute('color', new THREE.BufferAttribute(new Uint8Array(ebin, b.co, b.vn*3), 3, true));
+  g.setIndex(new THREE.BufferAttribute(new Uint32Array(ebin, b.io, b.fnum*3), 1));
+  const geo = toCreasedNormals(g, 40*D2R); g.dispose();
+  geo.computeBoundingBox(); geo.computeBoundingSphere();
+  return boardGeo[key] = geo;
+}
+const elec = {};   // id -> item
+const ELEC_COL = {board:0x34d399, proxy:0xfbbf24, dock:0x60a5fa};
+const mirY = v => [v[0], -v[1], v[2]];
+function register(id, label, kind, holder, meshes, info){
+  meshes.forEach(m => { m.userData.elec = id; m.castShadow = true; });
+  elec[id] = {id, label, kind, group:holder, meshes, info, hidden:false};
+}
+function mountAt(holder, pos, linkName){
+  if(linkName){ holder.position.copy(new THREE.Vector3(...pos).sub(zeroOrigin[linkName])); links[linkName].mount.add(holder); }
+  else { holder.position.set(...pos); scene.add(holder); }
+}
+function addBoard(id, key, linkName, pos, ax, ay, o = {}){
+  const d = ELEC.boards[key], geo = getBoardGeo(key);
+  const mat = new THREE.MeshStandardMaterial({vertexColors:true, metalness:0.25, roughness:0.55, side:THREE.DoubleSide});
+  const mesh = new THREE.Mesh(geo, mat), holder = new THREE.Group();
+  holder.quaternion.copy(basisQuat(ax, ay)); holder.add(mesh);
+  const outer = new THREE.Group(); outer.add(holder);
+  mountAt(outer, pos, linkName);
+  register(id, o.label || d.title, o.kind || 'board', outer, [mesh], {key, d, where:o.where || linkName, note:o.note});
+}
+function addProxy(id, label, kind, linkName, pos, build, info){
+  const holder = new THREE.Group(), meshes = build(holder);
+  mountAt(holder, pos, linkName);
+  register(id, label, 'proxy', holder, meshes, info);
+}
+const stdMat = (c, m = 0.3, r = 0.5) => new THREE.MeshStandardMaterial({color:c, metalness:m, roughness:r});
+const boxBuild = (sx, sy, sz, color, rad) => holder => { const m = new THREE.Mesh(new RoundedBoxGeometry(sx, sy, sz, 3, rad), stdMat(color)); holder.add(m); return [m]; };
+const fanBuild = holder => {
+  const frame = new THREE.Mesh(new RoundedBoxGeometry(0.010, 0.040, 0.040, 3, 0.002), stdMat(0x1f2937, 0.1, 0.7));
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.0165, 0.0016, 8, 28), stdMat(0x0b1220)); ring.rotation.y = Math.PI/2;
+  const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.0085, 0.0085, 0.011, 24), stdMat(0x374151, 0.4, 0.4)); hub.rotation.z = Math.PI/2;
+  const blades = new THREE.Mesh(new THREE.CylinderGeometry(0.0155, 0.0155, 0.003, 7), stdMat(0x22d3ee, 0.1, 0.6)); blades.rotation.z = Math.PI/2;
+  holder.add(frame, blades, hub, ring); return [frame, ring, hub, blades];
+};
+const BACK = [0,-1,0], FRONT = [0,1,0];   // board x-axis choice: makes the board's +z (component side) face back / front
+const Y = [0,1,0], Z = [0,0,1], X = [1,0,0];
+const PX = 'Approximate position: the RP1 repo ships no robot-level electrical assembly, so placement follows the hardware-architecture document.';
+// main compute + power chain, torso (waist_yaw_link); coordinates are zero-pose URDF metres
+addBoard('main',    'main',    'waist_yaw_link', [-0.040, 0, 0.300], FRONT, Z, {where:'chest, front of back-pack bay'});
+addBoard('backhub', 'backhub', 'waist_yaw_link', [-0.170, 0, 0.285], BACK, Z, {where:'rear of back-pack bay'});
+addBoard('hotswap', 'hotswap', 'waist_yaw_link', [-0.172, 0, 0.332], BACK, Z, {where:'rear of back-pack bay (top)'});
+addBoard('mingmei', 'mingmei', 'waist_yaw_link', [-0.168, 0.095, 0.285], BACK, Z, {where:'rear of back-pack bay (left)'});
+addBoard('indicator','indicator','waist_yaw_link',[-0.186, -0.090, 0.285], BACK, Z, {where:'back panel, externally visible'});
+addBoard('comm433', 'comm433', 'waist_yaw_link', [-0.090, 0.060, 0.385], BACK, Z, {where:'upper chest, rear'});
+addBoard('fpc',     'fpc',     'waist_yaw_link', [-0.095, 0.105, 0.290], X, Z, {where:'left of battery, links MAIN to BACKHUB'});
+addBoard('lamp',    'lamp',    'waist_yaw_link', [ 0.045, 0, 0.200], FRONT, Z, {where:'chest front (LOGO light)'});
+addBoard('head',    'head',    'waist_yaw_link', [-0.030, 0, 0.490], FRONT, Z, {where:'head'});
+// pelvis (base_link)
+addBoard('imu',     'imu',     'base_link', [-0.040, 0, -0.020], X, Y, {where:'pelvis, isolated from motor power loops'});
+addBoard('fan',     'fan',     'base_link', [-0.085, 0, -0.070], BACK, Z, {where:'hip, rear'});
+// legs / wrists (move with their link)
+addBoard('mcap_L',  'mcap',    'left_hip_roll_link',   [-0.020,  0.190, -0.170], Z, X,   {label:'RBE-PWR-MCAP (left)',  where:'left hip, next to motors'});
+addBoard('mcap_R',  'mcap',    'right_hip_roll_link',  [-0.020, -0.190, -0.170], Z, mirY(X), {label:'RBE-PWR-MCAP (right)', where:'right hip, next to motors'});
+addBoard('hand_L',  'hand',    'left_wrist_pitch_link',  [0.255,  0.222, 0.075], Z, X, {label:'RBE-PWR-HANDPlusPro (left)',  where:'left wrist'});
+addBoard('hand_R',  'hand',    'right_wrist_pitch_link', [0.255, -0.222, 0.075], Z, X, {label:'RBE-PWR-HANDPlusPro (right)', where:'right wrist'});
+// charging dock board (accessory, not on the robot): lies flat beside the robot
+addBoard('chg140',  'chg140',  null, [0.0, 0.014, 0.45], [1,0,0], [0,0,-1], {kind:'dock', where:'charging dock (off-robot accessory)'});
+// parts that have no CAD in the repo: simple labelled proxies
+const noCad = 'No CAD model in the repo; simple proxy block sized for illustration.';
+addProxy('batt48', '48 V main battery pack', 'proxy', 'waist_yaw_link', [-0.125, 0, 0.290], boxBuild(0.060, 0.110, 0.090, 0x1d4ed8, 0.006),
+  {pn:'YCL.E000276', fn:'Mingmei Li-ion pack, rear pull-out in the chest back; feeds MAIN and BACKHUB directly at 48 V.', size:[60,110,90], where:'back-pack bay', note:noCad});
+for(const [sfx, y] of [['L',0.050],['R',-0.050]])
+  addProxy('batt30_'+sfx, `30 V backup battery (${sfx === 'L' ? 'left' : 'right'})`, 'proxy', 'waist_yaw_link', [-0.060, y, 0.205], boxBuild(0.040, 0.040, 0.075, 0xea580c, 0.006),
+    {pn:'YCL.E000269', fn:'Hot-swappable 30 V small battery (x2); keeps critical control alive if main power drops.', size:[40,40,75], where:'lower chest', note:noCad});
+for(const [sfx, y] of [['L',0.045],['R',-0.045]])
+  addProxy('fan4010_'+sfx, `Waist fan 4010 (${sfx === 'L' ? 'left' : 'right'})`, 'proxy', 'base_link', [-0.097, y, 0.035], fanBuild,
+    {pn:'YCL.E000259', fn:'40x40x10 mm cooling fan (x2) driven by RBE-PWR-FAN.', size:[10,40,40], where:'pelvis, rear', note:noCad});
+$('#dofTxt').textContent += ` · ${Object.keys(elec).length} electrical parts`;
+
+
 function setJoint(J, v){
   v = Math.min(J.upper, Math.max(J.lower, v));
   J.value = v;
@@ -280,7 +381,7 @@ function lift(){
   if($('#oGround').checked){
     robotRoot.position.y = 0; robotRoot.updateMatrixWorld(true);
     unionBox.makeEmpty();
-    for(const L of Object.values(links)){ if(L.hidden) continue;
+    for(const L of Object.values(links)){    // ground contact ignores hidden parts so the robot does not jump
       tmpBox.copy(L.geo.boundingBox).applyMatrix4(L.mesh.matrixWorld); unionBox.union(tmpBox); }
     if(!unionBox.isEmpty()) robotRoot.position.y = -unionBox.min.y;
   } else robotRoot.position.y = 0;
@@ -295,13 +396,20 @@ function robotBounds(){
     tmpBox.copy(L.geo.boundingBox).applyMatrix4(L.mesh.matrixWorld);
     unionBox.union(tmpBox);
   }
+  if(typeof elec !== 'undefined') for(const it of Object.values(elec)){      // visible electronics count too (not the off-robot dock)
+    if(it.hidden || it.kind === 'dock' || !it.group.visible) continue;
+    tmpBox.setFromObject(it.group); unionBox.union(tmpBox);
+  }
+  if(unionBox.isEmpty()) for(const L of Object.values(links)){
+    tmpBox.copy(L.geo.boundingBox).applyMatrix4(L.mesh.matrixWorld); unionBox.union(tmpBox);
+  }
   return unionBox;
 }
 
 /* ---------- explode ---------- */
 let explode = 0, exploreCenter = new THREE.Vector3();
 function applyExplode(){
-  for(const L of Object.values(links)) L.mesh.position.set(...L.info.vorigin);
+  for(const L of Object.values(links)){ L.mesh.position.set(...L.info.vorigin); L.mount.position.set(0,0,0); }
   if(explode <= 0) return;
   robotRoot.updateMatrixWorld(true);
   const c = new THREE.Vector3(), wc = new THREE.Vector3(), cw = new THREE.Vector3(), a = new THREE.Vector3(), b = new THREE.Vector3();
@@ -317,6 +425,7 @@ function applyExplode(){
     L.group.worldToLocal(a); L.group.worldToLocal(b);
     L.mesh.position.add(b.sub(a));
   });
+  for(const L of all) L.mount.position.copy(L.mesh.position);
 }
 
 /* ---------- poses ---------- */
@@ -456,14 +565,39 @@ for(const n of order){
   el.querySelector('.eye').onclick = e => { setHidden(n, !L.hidden); };
   partList.appendChild(el); partEls[n] = el;
 }
+const rowEls = Object.entries(partEls).map(([id, el]) => ({id, el}));
+const hex6 = c => '#' + c.toString(16).padStart(6, '0');
+{ const h = document.createElement('h3'); h.innerHTML = 'Electrical<i></i>'; partList.appendChild(h); }
+for(const it of Object.values(elec)){
+  const id = 'e:'+it.id;
+  for(const host of [partList, $('#elecList')]){
+    const el = document.createElement('div'); el.className = 'part';
+    el.innerHTML = `<span class="dot" style="background:${hex6(ELEC_COL[it.kind])}"></span><span class="n"></span><span class="m">${it.kind === 'proxy' ? 'proxy' : it.kind === 'dock' ? 'dock' : 'PCB'}</span>${host === partList ? '<button class="eye" title="Toggle visibility">👁</button>' : ''}`;
+    el.querySelector('.n').textContent = it.label;
+    el.onclick = e => { if(e.target.classList.contains('eye')) return; select(id, true); if(host !== partList) focusOn(id); };
+    el.onmouseenter = () => hoverLink(id, true); el.onmouseleave = () => hoverLink(null);
+    const eye = el.querySelector('.eye'); if(eye) eye.onclick = () => setHidden(id, !it.hidden);
+    host.appendChild(el); rowEls.push({id, el}); if(host === partList) partEls[id] = el;
+  }
+}
+function applyElecVisibility(){ for(const it of Object.values(elec)) it.group.visible = !it.hidden && $('#eShow').checked; }
 function setHidden(n, h){
+  if(n.startsWith('e:')){ const it = elec[n.slice(2)]; it.hidden = h; applyElecVisibility(); partEls[n].querySelector('.eye').classList.toggle('off', h); return; }
   const L = links[n]; L.hidden = h; L.mesh.visible = !h;
   if(L.edges) L.edges.visible = !h && $('#oEdges').checked;
   partEls[n].querySelector('.eye').classList.toggle('off', h);
 }
-$('#showAll').onclick = () => Object.keys(links).forEach(n => setHidden(n, false));
+const allIds = () => [...Object.keys(links), ...Object.keys(elec).map(k => 'e:'+k)];
+const isolate = id => allIds().forEach(n => setHidden(n, n !== id));
+$('#showAll').onclick = () => allIds().forEach(n => setHidden(n, false));
 $('#hideSel').onclick = () => { if(sel) setHidden(sel, true); };
-$('#isoSel').onclick = () => { if(sel) Object.keys(links).forEach(n => setHidden(n, n !== sel)); };
+$('#isoSel').onclick = () => { if(sel) isolate(sel); };
+let structOp = 0.4;
+$('#eShow').addEventListener('change', applyElecVisibility);
+$('#sOp').addEventListener('input', e => { structOp = +e.target.value; $('#sOpV').textContent = Math.round(structOp*100)+'%'; applyMaterials(); });
+function setStruct(v){ $('#sOp').value = v; $('#sOp').dispatchEvent(new Event('input')); }
+$('#eSolid').onclick = () => { Object.keys(links).forEach(n => setHidden(n, false)); setStruct(1); };
+$('#eOnly').onclick = () => { $('#eShow').checked = true; Object.keys(links).forEach(n => setHidden(n, true)); allIds().filter(n => n.startsWith('e:')).forEach(n => setHidden(n, false)); };
 
 /* ---------- UI: view ---------- */
 let mode = 'Solid', colorMode = 'Original', cutAxis = null;
@@ -497,8 +631,9 @@ function applyMaterials(){
     const neon = colorMode === 'Neon';
     m.metalness = neon ? 0.15 : 0.4; m.roughness = neon ? 0.4 : 0.5;
     m.wireframe = mode === 'Wireframe';
-    m.transparent = mode === 'X-ray'; m.opacity = mode === 'X-ray' ? 0.28 : 1;
-    m.depthWrite = mode !== 'X-ray';
+    const ghost = mode === 'X-ray' || structOp < 0.99;
+    m.transparent = ghost; m.opacity = mode === 'X-ray' ? 0.28 : structOp;
+    m.depthWrite = !ghost;
     m.side = THREE.DoubleSide;
     m.clippingPlanes = cutAxis ? [clipPlane] : [];
     m.needsUpdate = true;
@@ -506,6 +641,7 @@ function applyMaterials(){
     if(L.edges){ L.edges.material.clippingPlanes = m.clippingPlanes; L.edges.material.needsUpdate = true; }
     m.emissive.setHex(0x000000);
   }
+  for(const it of Object.values(elec)) for(const mm of it.meshes){ mm.material.clippingPlanes = cutAxis ? [clipPlane] : []; mm.material.needsUpdate = true; }
   refreshHighlight();
 }
 
@@ -607,12 +743,13 @@ function pick(ev){
   ndc.set(((ev.clientX-r.left)/r.width)*2-1, -((ev.clientY-r.top)/r.height)*2+1);
   ray.setFromCamera(ndc, camera);
   const meshes = Object.values(links).filter(l => !l.hidden).map(l => l.mesh);
-  const hit = ray.intersectObjects(meshes, false);
-  for(const h of hit){
-    if(cutAxis && clipPlane.distanceToPoint(h.point) < 0) continue;  // clipped away
-    return h.object.userData.link;
+  Object.values(elec).forEach(it => { if(!it.hidden && $('#eShow').checked) meshes.push(...it.meshes); });
+  const hit = ray.intersectObjects(meshes, false).filter(h => !(cutAxis && clipPlane.distanceToPoint(h.point) < 0));
+  const idOf = h => h.object.userData.elec ? 'e:'+h.object.userData.elec : h.object.userData.link;
+  if(structOp < 0.95 || mode === 'X-ray'){   // ghosted shell: electronics win over the structure in front of them
+    const e = hit.find(h => h.object.userData.elec); if(e) return idOf(e);
   }
-  return null;
+  return hit.length ? idOf(hit[0]) : null;
 }
 function refreshHighlight(){
   for(const L of Object.values(links)){
@@ -621,17 +758,22 @@ function refreshHighlight(){
     L.mat.emissiveIntensity = 1;
     if(mode === 'X-ray') L.mat.opacity = (s||h) ? 0.8 : 0.28;
   }
-  for(const [n,el] of Object.entries(partEls)) el.classList.toggle('sel', n === sel);
+  for(const it of Object.values(elec)){
+    const id = 'e:'+it.id, s = id === sel, h = id === hov;
+    for(const m of it.meshes) if(m.material.emissive){ m.material.emissive.setHex(s ? 0x0a8fa6 : h ? 0x0b5f70 : 0x000000); }
+  }
+  for(const {id, el} of rowEls) el.classList.toggle('sel', id === sel);
 }
+const labelOf = n => n.startsWith('e:') ? elec[n.slice(2)].label : n.replace(/_link$/,'').replace(/_/g,' ');
 function hoverLink(n, fromUI){ hov = n; hovFromUI = !!fromUI && !!n; refreshHighlight(); }
 function select(n, fromUI){
   sel = n; refreshHighlight(); renderInfo();
-  if(n && fromUI && !links[n].hidden){ /* keep camera */ }
-  if(n) partEls[n].scrollIntoView({block:'nearest'});
+  if(n && partEls[n]) partEls[n].scrollIntoView({block:'nearest'});
 }
 function renderInfo(){
   const el = $('#info');
   if(!sel){ el.classList.remove('on'); return; }
+  if(sel.startsWith('e:')) return renderElecInfo(el);
   const L = links[sel], J = L.joint, sz = L.geo.boundingBox.getSize(new THREE.Vector3());
   const f = (x, d=0) => (x*1000).toFixed(d);
   el.innerHTML = `<h2>${sel}</h2><div style="color:var(--mute);font-size:11px;text-transform:uppercase;letter-spacing:.1em">${L.kind}</div>
@@ -648,15 +790,41 @@ function renderInfo(){
   </div>
   <div class="btnrow"><button class="btn" data-a="iso">Isolate</button><button class="btn" data-a="hide">Hide</button><button class="btn" data-a="focus">Focus</button><button class="btn" data-a="x">✕</button></div>`;
   el.classList.add('on');
-  el.querySelector('[data-a=iso]').onclick = () => Object.keys(links).forEach(n => setHidden(n, n !== sel));
+  el.querySelector('[data-a=iso]').onclick = () => isolate(sel);
   el.querySelector('[data-a=hide]').onclick = () => setHidden(sel, true);
-  el.querySelector('[data-a=focus]').onclick = () => {
-    const b = new THREE.Box3().setFromObject(L.mesh), c = b.getCenter(new THREE.Vector3());
-    const r = b.getSize(new THREE.Vector3()).length()*0.5;
-    const d = camera.position.clone().sub(controls.target).normalize();
-    focusAnim = {t:0, from:{p:camera.position.clone(), t:controls.target.clone()},
-                 to:{t:c, p:c.clone().addScaledVector(d, Math.max(0.25, r/Math.tan(camera.fov*D2R/2)*1.3))}};
-  };
+  el.querySelector('[data-a=focus]').onclick = () => focusOn(sel);
+  el.querySelector('[data-a=x]').onclick = () => select(null);
+}
+function focusOn(id){
+  lift(); applyExplode();
+  const obj = id.startsWith('e:') ? elec[id.slice(2)].group : links[id].mesh;
+  const b = new THREE.Box3().setFromObject(obj), c = b.getCenter(new THREE.Vector3());
+  const r = b.getSize(new THREE.Vector3()).length()*0.5;
+  const d = camera.position.clone().sub(controls.target).normalize();
+  focusAnim = {t:0, from:{p:camera.position.clone(), t:controls.target.clone()},
+               to:{t:c, p:c.clone().addScaledVector(d, Math.max(id.startsWith('e:') ? 0.14 : 0.25, r/Math.tan(camera.fov*D2R/2)*1.5))}};
+}
+function renderElecInfo(el){
+  const it = elec[sel.slice(2)], i = it.info, d = i.d || i;
+  const bom = i.d && i.d.bom, size = (d.size || []).map(v => Math.round(v)).join(' × ');
+  const esc = t => String(t).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+  el.innerHTML = `<h2>${esc(it.label)}</h2><div style="color:var(--mute);font-size:11px;text-transform:uppercase;letter-spacing:.1em">electrical · ${it.kind === 'proxy' ? 'proxy (no CAD)' : it.kind === 'dock' ? 'charging dock' : 'PCB assembly'}</div>
+  <div style="margin:8px 0;font-size:12px;color:var(--text)">${esc(d.fn || '')}</div>
+  <div class="k">
+    <span>Part no.</span><span>${esc(d.pn || '-')}${d.rev ? ' · ' + esc(d.rev) : ''}</span>
+    ${d.qty ? `<span>Qty per robot</span><span>${d.qty}</span>` : ''}
+    <span>Size (mm)</span><span>${size}</span>
+    <span>Location</span><span>${esc(i.where || '')}</span>
+    ${bom ? `<span>BOM</span><span>${bom.parts} parts / ${bom.lines} lines</span>` : ''}
+    ${d.fnum ? `<span>Triangles</span><span>${d.fnum.toLocaleString()}</span>` : ''}
+  </div>
+  ${bom && bom.key.length ? `<div style="font-size:11px;color:var(--mute);margin-bottom:8px">Key parts: <span style="font-family:var(--mono)">${bom.key.map(esc).join(', ')}</span></div>` : ''}
+  <div style="font-size:11px;color:var(--mute);margin-bottom:8px">${esc(i.note || (it.kind === 'dock' ? 'Accessory shown beside the robot.' : PX))}</div>
+  <div class="btnrow"><button class="btn" data-a="iso">Isolate</button><button class="btn" data-a="hide">Hide</button><button class="btn" data-a="focus">Focus</button><button class="btn" data-a="x">✕</button></div>`;
+  el.classList.add('on');
+  el.querySelector('[data-a=iso]').onclick = () => isolate(sel);
+  el.querySelector('[data-a=hide]').onclick = () => setHidden(sel, true);
+  el.querySelector('[data-a=focus]').onclick = () => focusOn(sel);
   el.querySelector('[data-a=x]').onclick = () => select(null);
 }
 let focusAnim = null, down = null, lastPick = 0;
@@ -674,7 +842,7 @@ canvas.addEventListener('pointermove', e => {
   canvas.style.cursor = n ? 'pointer' : 'default';
   if(n){
     const r = canvas.getBoundingClientRect();
-    tip.textContent = n.replace(/_link$/,'').replace(/_/g,' ');
+    tip.textContent = labelOf(n);
     tip.style.left = (e.clientX-r.left+14)+'px'; tip.style.top = (e.clientY-r.top+14)+'px'; tip.style.display = 'block';
   } else tip.style.display = 'none';
 });
@@ -754,7 +922,11 @@ window.__rp1 = {THREE, scene, camera, links, joints, goPose, POSES, setView, sel
   if(q.get('explode')){ $('#explode').value = q.get('explode'); $('#explode').dispatchEvent(new Event('input')); applyExplode(); }
   if(q.get('view')) setView(q.get('view'));
   fit();
+  if(q.get('ghost')) setStruct(+q.get('ghost'));
+  if(q.get('tab')) document.querySelector(`.tabs button[data-t=${q.get('tab')}]`)?.click();
   if(q.get('sel')) select(q.get('sel'));
+  if(q.get('only')){ $('#eOnly').click(); fit(); }
+  if(q.get('focus')) focusOn(q.get('focus'));
 }
 frame();
 </script>
